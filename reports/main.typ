@@ -455,7 +455,7 @@ whose radicand has derivative $24 sin(n t) (1 - cos(n t)) >= 0$ on $0 <= n t <= 
 #prob(title: [Lambert Problem])[
     Solve the Lambert, or two-point boundary value problem for the zero-revolution case with these terminal points and a time of flight of #qty(5200, "s").
     $
-        vb(r)_1 = mat(-6991; -5118; 7078) quad (unit("km")) \
+        vb(r)_1 = mat(-6991; 5118; 7078) quad (unit("km")) \
         vb(r)_2 = mat(11326; -6317; -6677) quad (unit("km"))
     $
 
@@ -482,7 +482,7 @@ whose radicand has derivative $24 sin(n t) (1 - cos(n t)) >= 0$ on $0 <= n t <= 
         cos(Delta theta) & = (vbu(r)_1 dot vbu(r)_2)/(r_1 r_2) = #result("06a", "cos dtheta").
     $
 
-    The zero-revolution problem has two solutions. The short way has $Delta theta = qty(result("06a", "dtheta_short"), "degree") < qty(180, "degree")$, and since $(vbu(r)_1 times vbu(r)_2) dot vuu(K) > 0$ it is prograde. The long way has $Delta theta = qty(result("06a", "dtheta_long"), "degree")$ and travels in the opposite sense.
+    The zero-revolution problem has two solutions. The short way has $Delta theta = qty(result("06a", "dtheta_short"), "degree") < qty(180, "degree")$. Its angular momentum points along $vbu(r)_1 times vbu(r)_2$, and since $(vbu(r)_1 times vbu(r)_2) dot vuu(K) < 0$, the short way is retrograde ($i > qty(90, "degree")$). The long way has $Delta theta = qty(result("06a", "dtheta_long"), "degree")$ and travels in the opposite, prograde sense. Because $Delta theta$ is close to #qty(180, "degree"), the two transfers need nearly the same semimajor axis.
 
     For a trial $a$, the angles $alpha$ and $beta$ follow from
     $
@@ -537,7 +537,7 @@ whose radicand has derivative $24 sin(n t) (1 - cos(n t)) >= 0$ on $0 <= n t <= 
         caption: [Lambert iteration on $a$ for both zero-revolution transfers.],
     ) <tab:s06a>
 
-    In both directions $t_p < qty(5200, "s") < t_c$, so both transfers are ellipses on the $alpha = alpha^(*)$ branch. The bisection converges in #result("06a", "iterations_short") iterations to a flight-time residual below $qty(resultRaw("06a", "residual_short"), "s")$.
+    In both directions $t_p < qty(5200, "s") < t_c$, so both transfers are ellipses on the $alpha = alpha^(*)$ branch. The bisection converges in #result("06a", "iterations_short") (short) and #result("06a", "iterations_long") (long) iterations, to flight-time residuals of $qty(resultRaw("06a", "residual_short"), "s")$ and $qty(resultRaw("06a", "residual_long"), "s")$.
 
     Thus, the initial and final velocities are:
     $
@@ -558,14 +558,14 @@ whose radicand has derivative $24 sin(n t) (1 - cos(n t)) >= 0$ on $0 <= n t <= 
         "Long way:" quad e & = #result("06b", "e_long"), quad r_p = qty(result("06b", "r_p_long"), "km"), quad theta_1 = qty(result("06b", "theta1_long"), "degree"), quad theta_1 + Delta theta = qty(result("06b", "theta2_long"), "degree").
     $
 
-    The short-way arc moves away from perigee the whole time, so its closest point is the start, $vbu(r)_1$. The long-way arc crosses perigee at $t = qty(result("06b", "t_perigee_long"), "s")$ after departure. With $R_plus.o = qty(6378, "km")$, the minimum geocentric distances are:
+    In both rows $theta_1 + Delta theta > qty(360, "degree")$, so both arcs pass through perigee: the short way at $t = qty(result("06b", "t_perigee_short"), "s")$ and the long way at $t = qty(result("06b", "t_perigee_long"), "s")$ after departure. Each arc's closest point is therefore its perigee. With $R_plus.o = qty(6378, "km")$, the minimum geocentric distances are:
     $
-        "Short way:" quad r_min & = r_1 = qty(result("06b", "r_min_short"), "km"), quad h_min = r_min - R_plus.o = qty(result("06b", "altitude_short"), "km"), \
+        "Short way:" quad r_min & = r_p = qty(result("06b", "r_min_short"), "km"), quad h_min = r_min - R_plus.o = qty(result("06b", "altitude_short"), "km"), \
         "Long way:" quad r_min & = r_p = qty(result("06b", "r_min_long"), "km"), quad h_min = r_min - R_plus.o = qty(result("06b", "altitude_long"), "km"), \
         & arrow.r.double quad "neither transfer crashes into the Earth" quad qed
     $
 
-    Both minima are well above Earth's surface. The long way's #qty(437, "km") perigee is also above the sensible atmosphere (roughly #qty(100, "km") to #qty(125, "km"), the default altitude stop in Tellurion), although the short way stays far higher. Sampling each arc at 2001 points gives the same minima to within #qty(1, "km").
+    Both perigees are thousands of kilometers above Earth's surface, and far above the sensible atmosphere (roughly #qty(100, "km") to #qty(125, "km"), the default altitude stop in Tellurion). The long way passes closer to the Earth than the short way. Sampling each arc at 2001 points gives the same minima to within #qty(1, "km").
 
     #figure(
         image("../outputs/figures/s06b.png", width: 65%),

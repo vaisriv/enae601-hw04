@@ -1005,7 +1005,7 @@ def problem_05() -> None:
 def problem_06() -> None:
     """Zero-revolution Lambert problem, both directions."""
     heading("p06")
-    r1_vec = np.array([-6991.0, -5118.0, 7078.0])  # km
+    r1_vec = np.array([-6991.0, 5118.0, 7078.0])  # km
     r2_vec = np.array([11326.0, -6317.0, -6677.0])  # km
     dt = 5200.0  # s
     r1, r2 = np.linalg.norm(r1_vec), np.linalg.norm(r2_vec)
@@ -1115,10 +1115,10 @@ def problem_06() -> None:
         ax.annotate(
             rf"$r_{{\min}} = {np.hypot(x[closest], y[closest]) * 1e3:.0f}$ km",
             (x[closest], y[closest]),
-            xytext=(8, -4) if branch == "long" else (8, -10),
+            xytext=(8, -4) if branch == "long" else (8, 6),
             textcoords="offset points",
             ha="left",
-            va="top",
+            va="top" if branch == "long" else "bottom",
             color=INK,
         )
     for vector, text, offset in (

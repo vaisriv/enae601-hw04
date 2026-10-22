@@ -4,7 +4,7 @@ import tellurion as tell
 
 # Fixed epoch for reproducible output; only the 5200 s separation matters.
 now = tell.abstime("2026-10-21T00:00:00")
-r1 = tell.pvtcart(np.array([-6991, -5118, 7078]), now)
+r1 = tell.pvtcart(np.array([-6991, 5118, 7078]), now)
 print(r1.cartesian)
 
 r2 = tell.pvtcart(np.array([11326, -6317, -6677]), now + 5200 * u.s)
