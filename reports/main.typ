@@ -311,16 +311,22 @@ whose radicand has derivative $24 sin(n t) (1 - cos(n t)) >= 0$ on $0 <= n t <= 
 
 #pagebreak(weak: true)
 
-//----------------------------
-// NOTE: ignore below for now
-//----------------------------
-
 #prob(title: [Orbit Propagation with STM])[
-    + Instructions
+    + Using Lagrange Coefficients, find the position, velocity, and time for this orbit #qty(30, "min") after epoch:
+        $
+            vb(r)_1 = mat(5740.13268349; 3314.06715; 0) quad (unit("km")) \
+            dot(vb(r))_1 = mat(-2.75082684; 4.76457184; 5.5016536) quad (unit("km/s"))
+        $
     <hwk:p05a>
 
-    + Instructions
+    + Find the two-body state transition matrix over #qty(30, "min") using Battin's technique for computing the two-body state transition matrix as described by #link("https://doi.org/10.2514/1.G001030")[Arora et. al, Section IV.A] and in class.
     <hwk:p05b>
+
+    +
+        #link("https://tellurion.readthedocs.io/en/latest/index.html")[Tellurion] will #link("https://tellurion.readthedocs.io/en/latest/prop.html")[propagate] and #link("https://tellurion.readthedocs.io/en/latest/prop.html#state-transition-matrix-stm")[compute the state transition matrix] simultaneously. You should specify the #link("https://tellurion.readthedocs.io/en/latest/prop.html#keplerian-two-body")[two-body propagator], and refer to the #link("https://tellurion.readthedocs.io/en/latest/tutorials/stm1.html")[STM tutorial] for examples on how to specify it. Although Tellurion requires an epoch time, what you choose for the initial state will not matter because of the two-body propagation; if you use #raw("tell.abstime(0.0)") it will use the current time.
+
+        Propagate using the two-body propagator in Tellurion and compute the state transition matrix. Compare with your results above and explain any differences you find.
+    <hwk:p05c>
 ] <hwk:p05>
 
 + Answer
@@ -329,27 +335,36 @@ whose radicand has derivative $24 sin(n t) (1 - cos(n t)) >= 0$ on $0 <= n t <= 
 + Answer
 <hwk:s05b>
 
-+ Answer
-<hwk:s05c>
++
+    #codly(header: [./src/s05c.py])
+    #raw(read("../src/s05c.py"), block: true, lang: "python") <code:s05c.py>
+    // #raw(read("../outputs/text/s05c.txt"), block: true) <code:s05c.txt>
 
-#codly(header: [./src/s05c.py])
-#raw(read("../src/s05c.py"), block: true, lang: "python") <code:s05c.py>
+    Answer
+<hwk:s05c>
 
 #pagebreak(weak: true)
 
 #prob(title: [Lambert Problem])[
-    Instructions
+    Solve the Lambert, or two-point boundary value problem for the zero-revolution case with these terminal points and a time of flight of #qty(5200, "s").
+    $
+        vb(r)_1 = mat(-6991; -5118; 7078) quad (unit("km")) \
+        vb(r)_2 = mat(11326; -6317; -6677) quad (unit("km"))
+    $
 
-    + Instructions
+    + Using the method shown in class, compute the initial and final velocities.
     <hwk:p06a>
 
-    + Instructions
+    + Find the minimum geocentric distance over each orbit segment, and whether it is sufficiently large to avoid crashing into the earth.
     <hwk:p06b>
 
-    + Instructions
+    + Recompute #link(<hwk:p06a>)[Part A] with Tellurion. Do your results agree?
     <hwk:p06c>
 
-    + Instructions
+    +
+        Propagate the initial state to the final time and compare the resultant position vector with the final position vector $vb(r)_2$ given in the problem. You may use Tellurion for this task; please use an #link("https://tellurion.readthedocs.io/en/latest/prop.html#keplerian-two-body")[analytic two-body propagator].
+
+        Tellurion solves #link("https://tellurion.readthedocs.io/en/latest/lambert.html")[the Lambert problem] directly from two position inputs. Positions are made with the function #link("https://tellurion.readthedocs.io/en/latest/posvel.html#tellurion.pvtcart")[#raw("tell.pvtcart()")], use #raw("tell.lambert()") to solve this problem.
     <hwk:p06d>
 ] <hwk:p06>
 
@@ -359,17 +374,21 @@ whose radicand has derivative $24 sin(n t) (1 - cos(n t)) >= 0$ on $0 <= n t <= 
 + Answer
 <hwk:s06b>
 
-+ Answer
++
+    #codly(header: [./src/s06c.py])
+    #raw(read("../src/s06c.py"), block: true, lang: "python") <code:s06c.py>
+    // #raw(read("../outputs/text/s06c.txt"), block: true) <code:s06c.txt>
+
+    Answer
 <hwk:s06c>
 
-#codly(header: [./src/s06c.py])
-#raw(read("../src/s06c.py"), block: true, lang: "python") <code:s06c.py>
++
+    #codly(header: [./src/s06d.py])
+    #raw(read("../src/s06d.py"), block: true, lang: "python") <code:s06d.py>
+    // #raw(read("../outputs/text/s06d.txt"), block: true) <code:s06d.txt>
 
-+ Answer
+    Answer
 <hwk:s06d>
-
-#codly(header: [./src/s06d.py])
-#raw(read("../src/s06d.py"), block: true, lang: "python") <code:s06d.py>
 
 #pagebreak(weak: true)
 
