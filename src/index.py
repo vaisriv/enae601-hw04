@@ -1,3 +1,6 @@
+import contextlib
+import io
+import runpy
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -47,6 +50,12 @@ def heading(problem: str) -> None:
 def clean(value: float) -> float:
     """Zero out round-off so values like -1e-17 do not print as -0.000000."""
     return 0.0 if abs(value) < 1e-12 else float(value)
+
+
+def sci(value: float, digits: int = 1) -> str:
+    """Scientific notation without exponent padding, e.g. 2.5e-6 (for unify)."""
+    mantissa, exponent = f"{value:.{digits}e}".split("e")
+    return f"{mantissa}e{int(exponent)}"
 
 
 def write_output(name: str, lines: list[str]) -> None:
@@ -156,6 +165,261 @@ def check_cw(n: float, t: float, dr0: np.ndarray, dv0: np.ndarray) -> float:
     error = np.linalg.norm(numerical - np.concatenate((dr, dv)))
     assert error < 1e-9, error
     return error
+
+
+def matrix_lines(
+    name: str, matrix: np.ndarray, unit: str = "", precision: int = 6
+) -> list[str]:
+    """Format each entry of a matrix as its own key/value line (name_ij)."""
+    return [
+        f"{name}_{i + 1}{j + 1} = {clean(value):.{precision}f} {unit}".rstrip()
+        for i, row in enumerate(matrix)
+        for j, value in enumerate(row)
+    ]
+
+
+def run_snippet(name: str) -> dict:
+    """Run a standalone Tellurion snippet, saving its printed output for Typst."""
+    buffer = io.StringIO()
+    # Snippets set their own numpy print options; restore ours afterwards.
+    with np.printoptions(), contextlib.redirect_stdout(buffer):
+        namespace = runpy.run_path(
+            str(ROOT / "src" / f"{name}.py"), run_name="__main__"
+        )
+    output = buffer.getvalue()
+    print(output, end="")
+    TEXT_DIR.mkdir(parents=True, exist_ok=True)
+    (TEXT_DIR / f"{name}.txt").write_text(output, encoding="utf-8")
+    return namespace
+
+
+def solve_kepler_delta_e(mean: float, ecos: float, esin: float) -> float:
+    """Solve n dt = dE - (e cos E1) sin dE + (e sin E1)(1 - cos dE) for dE."""
+    delta = mean
+    for _ in range(50):
+        step = (delta - ecos * np.sin(delta) + esin * (1.0 - np.cos(delta)) - mean) / (
+            1.0 - ecos * np.cos(delta) + esin * np.sin(delta)
+        )
+        delta -= step
+        if abs(step) < 1e-14:
+            return delta
+    raise RuntimeError("Elliptic Kepler iteration did not converge.")
+
+
+def lagrange_propagate(
+    r1_vec: np.ndarray, v1_vec: np.ndarray, dt: float, mu: float = MU_EARTH
+) -> dict:
+    """Two-body propagation with the Lagrange coefficients in Delta E."""
+    r1 = np.linalg.norm(r1_vec)
+    alpha = 2.0 / r1 - v1_vec @ v1_vec / mu
+    if alpha <= 0.0:
+        raise ValueError("The Delta E Lagrange coefficients require an ellipse.")
+    a = 1.0 / alpha
+    sigma1 = r1_vec @ v1_vec / np.sqrt(mu)
+    # e cos(E1) and e sin(E1) from the initial state.
+    ecos, esin = 1.0 - r1 / a, sigma1 / np.sqrt(a)
+    mean = np.sqrt(mu / a**3) * dt
+    delta = solve_kepler_delta_e(mean, ecos, esin)
+    c, s = np.cos(delta), np.sin(delta)
+    r = a + (r1 - a) * c + sigma1 * np.sqrt(a) * s
+    f = 1.0 - a / r1 * (1.0 - c)
+    g = dt - np.sqrt(a**3 / mu) * (delta - s)
+    f_dot = -np.sqrt(mu * a) * s / (r * r1)
+    g_dot = 1.0 - a / r * (1.0 - c)
+    return {
+        "a": a,
+        "e": np.hypot(ecos, esin),
+        "sigma1": sigma1,
+        "ecos": ecos,
+        "esin": esin,
+        "M": mean,
+        "dE": delta,
+        "r": r,
+        "f": f,
+        "g": g,
+        "f_dot": f_dot,
+        "g_dot": g_dot,
+        "r2": f * r1_vec + g * v1_vec,
+        "v2": f_dot * r1_vec + g_dot * v1_vec,
+    }
+
+
+def battin_stm(
+    r1_vec: np.ndarray, v1_vec: np.ndarray, dt: float, prop: dict, mu: float = MU_EARTH
+) -> tuple[np.ndarray, dict]:
+    """Battin's two-body STM from the universal functions U1-U5.
+
+    Arora, Russell, Strange, and Ottesen (2015), Section IV.A, Eqs. 38-50.
+    """
+    r2_vec, v2_vec = prop["r2"], prop["v2"]
+    f, g, f_dot, g_dot = (prop[key] for key in ("f", "g", "f_dot", "g_dot"))
+    r1, r2 = np.linalg.norm(r1_vec), np.linalg.norm(r2_vec)
+    root_mu = np.sqrt(mu)
+    alpha = 2.0 / r1 - v1_vec @ v1_vec / mu
+    sigma1 = r1_vec @ v1_vec / root_mu
+    sigma2 = r2_vec @ v2_vec / root_mu
+    chi = alpha * root_mu * dt + sigma2 - sigma1
+    u1 = -r2 * r1 * f_dot / root_mu
+    u2 = r1 * (1.0 - f)
+    u3 = root_mu * (dt - g)
+    u4 = u1 * u3 - 0.5 * (u2**2 - alpha * u3**2)
+    u5 = (chi**3 / 6.0 - u3) / alpha
+    c_bar = (3.0 * u5 - chi * u4 - root_mu * dt * u2) / root_mu
+
+    eye, outer = np.eye(3), np.outer
+    dv = v2_vec - v1_vec
+    block_a = (
+        r2 / mu * outer(dv, dv)
+        + (r1 * (1.0 - f) * outer(r2_vec, r1_vec) + c_bar * outer(v2_vec, r1_vec))
+        / r1**3
+        + f * eye
+    )
+    block_b = (
+        r1 / mu * (1.0 - f) * (outer(r2_vec - r1_vec, v1_vec) - outer(dv, r1_vec))
+        + c_bar / mu * outer(v2_vec, v1_vec)
+        + g * eye
+    )
+    rotation = outer(r2_vec, v2_vec) - outer(v2_vec, r2_vec)
+    block_c = (
+        -outer(dv, r1_vec) / r1**2
+        - outer(r2_vec, dv) / r2**2
+        + f_dot
+        * (
+            eye
+            - outer(r2_vec, r2_vec) / r2**2
+            + outer(rotation @ r2_vec, dv) / (mu * r2)
+        )
+        - mu * c_bar / (r1**3 * r2**3) * outer(r2_vec, r1_vec)
+    )
+    block_d = (
+        r1 / mu * outer(dv, dv)
+        + (r1 * (1.0 - f) * outer(r2_vec, r1_vec) - c_bar * outer(r2_vec, v1_vec))
+        / r2**3
+        + g_dot * eye
+    )
+    terms = {
+        "alpha": alpha,
+        "sigma1": sigma1,
+        "sigma2": sigma2,
+        "chi": chi,
+        "U1": u1,
+        "U2": u2,
+        "U3": u3,
+        "U4": u4,
+        "U5": u5,
+        "C_bar": c_bar,
+    }
+    return np.block([[block_a, block_b], [block_c, block_d]]), terms
+
+
+def finite_difference_stm(
+    r1_vec: np.ndarray, v1_vec: np.ndarray, dt: float, mu: float = MU_EARTH
+) -> np.ndarray:
+    """Central-difference Jacobian of the Lagrange propagation (checks Phi)."""
+    state = np.concatenate((r1_vec, v1_vec))
+    steps = np.array([1e-3] * 3 + [1e-6] * 3)  # 1 m and 1 mm/s
+    phi = np.empty((6, 6))
+    for k, step in enumerate(steps):
+        offset = np.zeros(6)
+        offset[k] = step
+        ends = []
+        for sign in (1.0, -1.0):
+            shifted = state + sign * offset
+            prop = lagrange_propagate(shifted[:3], shifted[3:], dt, mu)
+            ends.append(np.concatenate((prop["r2"], prop["v2"])))
+        phi[:, k] = (ends[0] - ends[1]) / (2.0 * step)
+    return phi
+
+
+def block_errors(difference: np.ndarray, reference: np.ndarray) -> list[float]:
+    """Largest entry of each 3x3 block of a difference, relative to the block."""
+    errors = []
+    for rows in (slice(0, 3), slice(3, 6)):
+        for cols in (slice(0, 3), slice(3, 6)):
+            errors.append(
+                np.max(np.abs(difference[rows, cols]))
+                / np.max(np.abs(reference[rows, cols]))
+            )
+    return errors
+
+
+def lambert_prussing(
+    r1_vec: np.ndarray,
+    r2_vec: np.ndarray,
+    dt: float,
+    shortway: bool = True,
+    mu: float = MU_EARTH,
+) -> dict:
+    """Zero-revolution Lambert solution by iterating on the semimajor axis.
+
+    Lagrange's time equation in the alpha, beta form (Prussing and Conway):
+    s = (r1 + r2 + c)/2, sin^2(alpha/2) = s/2a, sin^2(beta/2) = (s - c)/2a.
+    """
+    r1, r2 = np.linalg.norm(r1_vec), np.linalg.norm(r2_vec)
+    chord = np.linalg.norm(r2_vec - r1_vec)
+    s = (r1 + r2 + chord) / 2.0
+    sign = 1.0 if shortway else -1.0
+    # Parabolic (Euler) flight time; shorter flights are hyperbolic.
+    t_p = ((r1 + r2 + chord) ** 1.5 - sign * (r1 + r2 - chord) ** 1.5) / (
+        6.0 * np.sqrt(mu)
+    )
+    if dt <= t_p:
+        raise ValueError("Flight time is below the parabolic time (hyperbola).")
+    # Minimum-energy ellipse: a_min = s/2, alpha = pi.
+    a_min = s / 2.0
+    beta_c = sign * 2.0 * np.arcsin(np.sqrt((s - chord) / s))
+    t_c = (np.pi - (beta_c - np.sin(beta_c))) / np.sqrt(mu / a_min**3)
+
+    def angles(a: float) -> tuple[float, float]:
+        alpha = 2.0 * np.arcsin(min(1.0, np.sqrt(s / (2.0 * a))))
+        beta = sign * 2.0 * np.arcsin(np.sqrt((s - chord) / (2.0 * a)))
+        # Flights longer than t_c take the branch through the vacant focus.
+        return (TAU - alpha if dt > t_c else alpha), beta
+
+    def residual(a: float) -> float:
+        alpha, beta = angles(a)
+        return (alpha - beta - (np.sin(alpha) - np.sin(beta))) / np.sqrt(mu / a**3) - dt
+
+    # Bracket the root in a, then bisect.
+    low, high = a_min, 2.0 * a_min
+    while np.sign(residual(high)) == np.sign(residual(low)):
+        high *= 2.0
+    for iterations in range(1, 201):
+        middle = 0.5 * (low + high)
+        if np.sign(residual(middle)) == np.sign(residual(low)):
+            low = middle
+        else:
+            high = middle
+        if high - low <= 1e-14 * high:
+            break
+    a = 0.5 * (low + high)
+
+    alpha, beta = angles(a)
+    delta = alpha - beta
+    f = 1.0 - a / r1 * (1.0 - np.cos(delta))
+    g = dt - np.sqrt(a**3 / mu) * (delta - np.sin(delta))
+    g_dot = 1.0 - a / r2 * (1.0 - np.cos(delta))
+    swept = np.arccos(r1_vec @ r2_vec / (r1 * r2))
+    return {
+        "c": chord,
+        "s": s,
+        "a_min": a_min,
+        "t_p": t_p,
+        "beta_c": beta_c,
+        "t_c": t_c,
+        "a": a,
+        "alpha": alpha,
+        "beta": beta,
+        "dE": delta,
+        "dtheta": swept if shortway else TAU - swept,
+        "f": f,
+        "g": g,
+        "g_dot": g_dot,
+        "v1": (r2_vec - f * r1_vec) / g,
+        "v2": (g_dot * r2_vec - r1_vec) / g,
+        "iterations": iterations,
+        "residual": residual(a),
+    }
 
 
 def problem_01() -> None:
@@ -602,6 +866,332 @@ def problem_04() -> None:
     save_figure(fig, "04")
 
 
+def problem_05() -> None:
+    """Propagation with Lagrange coefficients, Battin's STM, and Tellurion."""
+    heading("p05")
+    r1_vec = np.array([5740.13268349, 3314.06715, 0.0])  # km
+    v1_vec = np.array([-2.75082684, 4.76457184, 5.5016536])  # km/s
+    dt = 30.0 * 60.0  # s
+
+    # (a) Lagrange coefficients in terms of Delta E.
+    prop = lagrange_propagate(r1_vec, v1_vec, dt)
+    r2_vec, v2_vec = prop["r2"], prop["v2"]
+    energy = v1_vec @ v1_vec / 2.0 - MU_EARTH / np.linalg.norm(r1_vec)
+    np.testing.assert_allclose(np.linalg.norm(r2_vec), prop["r"], rtol=1e-12)
+    np.testing.assert_allclose(
+        prop["f"] * prop["g_dot"] - prop["f_dot"] * prop["g"], 1.0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        np.cross(r2_vec, v2_vec), np.cross(r1_vec, v1_vec), rtol=1e-12
+    )
+    np.testing.assert_allclose(
+        v2_vec @ v2_vec / 2.0 - MU_EARTH / prop["r"], energy, rtol=1e-12
+    )
+    numerical = rk4(two_body_rate, np.concatenate((r1_vec, v1_vec)), dt, 6000)
+    rk4_error = np.linalg.norm(numerical[:3] - r2_vec)
+    assert rk4_error < 1e-6, rk4_error
+    period = TAU * np.sqrt(prop["a"] ** 3 / MU_EARTH)
+
+    write_output(
+        "05a",
+        [
+            f"r1 = {np.linalg.norm(r1_vec):.6f} km",
+            f"v1 = {np.linalg.norm(v1_vec):.6f} km/s",
+            f"energy = {energy:.6f} km^2/s^2",
+            f"a = {prop['a']:.6f} km",
+            f"e = {prop['e']:.10f}",
+            f"period = {period:.6f} s",
+            f"n = {np.sqrt(MU_EARTH / prop['a'] ** 3):.10f} rad/s",
+            f"sigma1 = {prop['sigma1']:.10f} km^0.5",
+            f"ecos = {prop['ecos']:.10f}",
+            f"esin = {prop['esin']:.10f}",
+            f"M = {prop['M']:.10f} rad",
+            f"dE = {prop['dE']:.10f} rad",
+            f"dE_deg = {np.degrees(prop['dE']):.6f} deg",
+            f"r2 = {prop['r']:.6f} km",
+            f"f = {prop['f']:.10f}",
+            f"g = {prop['g']:.6f} s",
+            f"f_dot = {prop['f_dot']:.10f} 1/s",
+            f"g_dot = {prop['g_dot']:.10f}",
+            *vector_lines("r2", r2_vec, "km"),
+            *vector_lines("v2", v2_vec, "km/s", precision=9),
+            f"dt = {dt:.1f} s",
+            f"lagrange identity = {prop['f'] * prop['g_dot'] - prop['f_dot'] * prop['g']:.12f}",
+            f"rk4 position difference = {sci(rk4_error, 3)} km",
+        ],
+    )
+
+    # (b) Battin's two-body STM in universal functions.
+    phi, terms = battin_stm(r1_vec, v1_vec, dt, prop)
+    fd_errors = block_errors(finite_difference_stm(r1_vec, v1_vec, dt) - phi, phi)
+    assert max(fd_errors) < 1e-6, fd_errors
+    # A two-body STM is symplectic: Phi^T J Phi = J, so det(Phi) = 1.
+    zero, eye = np.zeros((3, 3)), np.eye(3)
+    j_matrix = np.block([[zero, eye], [-eye, zero]])
+    symplectic_error = np.max(np.abs(phi.T @ j_matrix @ phi - j_matrix))
+    assert symplectic_error < 1e-9, symplectic_error
+    determinant = np.linalg.det(phi)
+    np.testing.assert_allclose(determinant, 1.0, atol=1e-9)
+    np.testing.assert_allclose(
+        terms["chi"], np.sqrt(prop["a"]) * prop["dE"], rtol=1e-12
+    )
+
+    write_output(
+        "05b",
+        [
+            f"alpha = {terms['alpha']:.12f} 1/km",
+            f"sigma1 = {terms['sigma1']:.10f} km^0.5",
+            f"sigma2 = {terms['sigma2']:.10f} km^0.5",
+            f"chi = {terms['chi']:.10f} km^0.5",
+            f"U1 = {terms['U1']:.6f} km^0.5",
+            f"U2 = {terms['U2']:.6f} km",
+            f"U3 = {terms['U3']:.6f} km^1.5",
+            f"U4 = {terms['U4']:.6f} km^2",
+            f"U5 = {terms['U5']:.6f} km^2.5",
+            f"C_bar = {terms['C_bar']:.6f} km s",
+            *matrix_lines("A", phi[:3, :3], precision=7),
+            *matrix_lines("B", phi[:3, 3:], "s", precision=4),
+            *matrix_lines("C", phi[3:, :3] * 1e3, "1e-3/s", precision=7),
+            *matrix_lines("D", phi[3:, 3:], precision=7),
+            f"finite difference error = {sci(max(fd_errors))}",
+            f"symplectic error = {sci(symplectic_error)}",
+            f"det = {determinant:.12f}",
+        ],
+    )
+
+    # (c) Tellurion's two-body propagation and STM, then the source of the
+    # differences: Orekit's gravitational parameter.
+    tell = run_snippet("s05c")
+    mu_tell = tell["mu"]
+    dr = np.linalg.norm(tell["r2"] - r2_vec)
+    dv = np.linalg.norm(tell["v2"] - v2_vec)
+    dphi = block_errors(tell["stm"] - phi, phi)
+    # Sensitivity of the final state to mu predicts the position difference.
+    step = 1e-3  # km^3/s^2
+    plus = lagrange_propagate(r1_vec, v1_vec, dt, MU_EARTH + step)["r2"]
+    minus = lagrange_propagate(r1_vec, v1_vec, dt, MU_EARTH - step)["r2"]
+    predicted = (plus - minus) / (2.0 * step) * (mu_tell - MU_EARTH)
+    prop_tell = lagrange_propagate(r1_vec, v1_vec, dt, mu_tell)
+    phi_tell, _ = battin_stm(r1_vec, v1_vec, dt, prop_tell, mu_tell)
+    dr_same = np.linalg.norm(tell["r2"] - prop_tell["r2"])
+    dv_same = np.linalg.norm(tell["v2"] - prop_tell["v2"])
+    dphi_same = block_errors(tell["stm"] - phi_tell, phi_tell)
+    np.testing.assert_allclose(tell["r2"] - r2_vec, predicted, atol=1e-6)
+    assert dr_same < 1e-6 and dv_same < 1e-9, (dr_same, dv_same)
+    assert max(dphi_same) < 1e-8, dphi_same
+
+    write_output(
+        "05c-cmp",
+        [
+            f"mu tellurion = {mu_tell:.4f} km^3/s^2",
+            f"mu difference = {mu_tell - MU_EARTH:.4f} km^3/s^2",
+            f"mu ratio = {sci((mu_tell - MU_EARTH) / MU_EARTH, 2)}",
+            *vector_lines("dr", (tell["r2"] - r2_vec) * 1e3, "m", precision=4),
+            f"dr = {dr * 1e3:.4f} m",
+            f"dv = {dv * 1e6:.4f} mm/s",
+            *vector_lines("predicted", predicted * 1e3, "m", precision=4),
+            f"dphi A = {sci(dphi[0])}",
+            f"dphi B = {sci(dphi[1])}",
+            f"dphi C = {sci(dphi[2])}",
+            f"dphi D = {sci(dphi[3])}",
+            f"dphi max = {sci(max(dphi))}",
+            f"dr same mu = {sci(dr_same * 1e3)} m",
+            f"dv same mu = {sci(dv_same * 1e6)} mm/s",
+            f"dphi same mu = {sci(max(dphi_same))}",
+        ],
+    )
+
+
+def problem_06() -> None:
+    """Zero-revolution Lambert problem, both directions."""
+    heading("p06")
+    r1_vec = np.array([-6991.0, -5118.0, 7078.0])  # km
+    r2_vec = np.array([11326.0, -6317.0, -6677.0])  # km
+    dt = 5200.0  # s
+    r1, r2 = np.linalg.norm(r1_vec), np.linalg.norm(r2_vec)
+    branches = {"short": True, "long": False}
+
+    # (a) Semimajor-axis iteration, then the Delta E Lagrange coefficients.
+    solutions = {
+        branch: lambert_prussing(r1_vec, r2_vec, dt, shortway)
+        for branch, shortway in branches.items()
+    }
+    lines = [
+        f"r1 = {r1:.6f} km",
+        f"r2 = {r2:.6f} km",
+        f"c = {solutions['short']['c']:.6f} km",
+        f"s = {solutions['short']['s']:.6f} km",
+        f"a_min = {solutions['short']['a_min']:.6f} km",
+        f"cos dtheta = {r1_vec @ r2_vec / (r1 * r2):.10f}",
+        f"h_z sign = {np.sign(np.cross(r1_vec, r2_vec)[2]):+.0f}",
+    ]
+    for branch, sol in solutions.items():
+        # The solved initial state must reach r2 after dt (Lagrange and RK4).
+        prop = lagrange_propagate(r1_vec, sol["v1"], dt)
+        np.testing.assert_allclose(prop["r2"], r2_vec, rtol=0.0, atol=1e-6)
+        np.testing.assert_allclose(prop["v2"], sol["v2"], rtol=0.0, atol=1e-9)
+        numerical = rk4(two_body_rate, np.concatenate((r1_vec, sol["v1"])), dt, 20000)
+        assert np.linalg.norm(numerical[:3] - r2_vec) < 1e-6
+        np.testing.assert_allclose(prop["a"], sol["a"], rtol=1e-12)
+        lines += [
+            f"t_p_{branch} = {sol['t_p']:.6f} s",
+            f"beta_c_{branch} = {np.degrees(sol['beta_c']):.6f} deg",
+            f"t_c_{branch} = {sol['t_c']:.6f} s",
+            f"dtheta_{branch} = {np.degrees(sol['dtheta']):.6f} deg",
+            f"a_{branch} = {sol['a']:.6f} km",
+            f"alpha_{branch} = {np.degrees(sol['alpha']):.6f} deg",
+            f"beta_{branch} = {np.degrees(sol['beta']):.6f} deg",
+            f"dE_{branch} = {np.degrees(sol['dE']):.6f} deg",
+            f"f_{branch} = {sol['f']:.10f}",
+            f"g_{branch} = {sol['g']:.6f} s",
+            f"g_dot_{branch} = {sol['g_dot']:.10f}",
+            *vector_lines(f"v1_{branch}", sol["v1"], "km/s", precision=9),
+            *vector_lines(f"v2_{branch}", sol["v2"], "km/s", precision=9),
+            f"iterations_{branch} = {sol['iterations']}",
+            f"residual_{branch} = {sci(abs(sol['residual']))} s",
+        ]
+    write_output("06a", lines)
+
+    # (b) Closest approach on each arc: perigee if the arc passes through it,
+    # otherwise the nearer endpoint.
+    lines = []
+    arcs = {}
+    times = np.linspace(0.0, dt, 2001)
+    for branch, sol in solutions.items():
+        h_vec = np.cross(r1_vec, sol["v1"])
+        h_hat = h_vec / np.linalg.norm(h_vec)
+        e_vec = np.cross(sol["v1"], h_vec) / MU_EARTH - r1_vec / r1
+        e = np.linalg.norm(e_vec)
+        theta1 = np.arctan2(h_hat @ np.cross(e_vec, r1_vec), e_vec @ r1_vec) % TAU
+        theta2 = theta1 + sol["dtheta"]
+        perigee = sol["a"] * (1.0 - e)
+        through_perigee = theta2 >= TAU
+        r_min = perigee if through_perigee else min(r1, r2)
+        # Time from r1 to perigee, from the mean anomaly at r1.
+        e1 = 2.0 * np.arctan(np.sqrt((1.0 - e) / (1.0 + e)) * np.tan(theta1 / 2.0))
+        mean1 = (e1 - e * np.sin(e1)) % TAU
+        t_perigee = (TAU - mean1) / np.sqrt(MU_EARTH / sol["a"] ** 3)
+        # Sampled check on the closest approach along the arc.
+        arc = np.array([lagrange_propagate(r1_vec, sol["v1"], t)["r2"] for t in times])
+        arcs[branch] = arc
+        sampled = np.min(np.linalg.norm(arc, axis=1))
+        assert r_min <= sampled + 1e-6 and sampled - r_min < 1.0, (r_min, sampled)
+        assert through_perigee == (t_perigee < dt)
+        lines += [
+            f"e_{branch} = {e:.10f}",
+            f"r_p_{branch} = {perigee:.6f} km",
+            f"theta1_{branch} = {np.degrees(theta1):.6f} deg",
+            f"theta2_{branch} = {np.degrees(theta2):.6f} deg",
+            f"through perigee_{branch} = {through_perigee}",
+            f"t_perigee_{branch} = {t_perigee:.6f} s",
+            f"r_min_{branch} = {r_min:.6f} km",
+            f"altitude_{branch} = {r_min - R_EARTH:.6f} km",
+            f"sampled r_min_{branch} = {sampled:.6f} km",
+        ]
+    write_output("06b", lines)
+
+    # Both arcs in the transfer plane (x along r1, z along r1 x r2).
+    x_hat = r1_vec / r1
+    z_hat = np.cross(r1_vec, r2_vec)
+    z_hat /= np.linalg.norm(z_hat)
+    y_hat = np.cross(z_hat, x_hat)
+    fig, ax = plt.subplots(figsize=(5.6, 5.2))
+    ax.add_patch(
+        plt.Circle((0.0, 0.0), R_EARTH / 1e3, facecolor=GRID, edgecolor=BASELINE)
+    )
+    ax.text(0.0, 0.0, "Earth", ha="center", va="center", color=INK_SECONDARY)
+    for (branch, arc), color in zip(arcs.items(), SERIES):
+        x, y = arc @ x_hat / 1e3, arc @ y_hat / 1e3
+        ax.plot(x, y, color=color, lw=2.0, label=f"{branch} way")
+        middle = len(x) // 2
+        ax.annotate(
+            "",
+            xy=(x[middle + 1], y[middle + 1]),
+            xytext=(x[middle - 1], y[middle - 1]),
+            arrowprops={"arrowstyle": "-|>", "color": color, "lw": 1.8},
+        )
+        closest = np.argmin(np.hypot(x, y))
+        ax.plot(x[closest], y[closest], "o", color=color, ms=6)
+        ax.annotate(
+            rf"$r_{{\min}} = {np.hypot(x[closest], y[closest]) * 1e3:.0f}$ km",
+            (x[closest], y[closest]),
+            xytext=(8, -4) if branch == "long" else (8, -10),
+            textcoords="offset points",
+            ha="left",
+            va="top",
+            color=INK,
+        )
+    for vector, text, offset in (
+        (r1_vec, r"$\mathbf{r}_1$ ($t = 0$)", (8, 0)),
+        (r2_vec, r"$\mathbf{r}_2$ ($t = 5200$ s)", (8, 0)),
+    ):
+        point = (vector @ x_hat / 1e3, vector @ y_hat / 1e3)
+        ax.plot(*point, "s", color=INK, ms=6)
+        ax.annotate(
+            text,
+            point,
+            xytext=offset,
+            textcoords="offset points",
+            ha="left",
+            va="center",
+            color=INK,
+        )
+    ax.set_aspect("equal")
+    ax.set_xlabel(r"along $\hat{\mathbf{r}}_1$ [$10^3$ km]")
+    ax.set_ylabel(r"in-plane normal [$10^3$ km]")
+    ax.legend(loc="lower left")
+    save_figure(fig, "06b")
+
+    # (c) Tellurion's Lambert solver (Orekit), compared with the class method.
+    tell = run_snippet("s06c")
+    mu_tell = tell["mu"]
+    lines = [f"mu tellurion = {mu_tell:.4f} km^3/s^2"]
+    dv_all, dv_same_all = [], []
+    for branch, shortway in branches.items():
+        v1_tell, v2_tell = tell["velocities"][branch]
+        same = lambert_prussing(r1_vec, r2_vec, dt, shortway, mu_tell)
+        dv1 = np.linalg.norm(v1_tell - solutions[branch]["v1"])
+        dv2 = np.linalg.norm(v2_tell - solutions[branch]["v2"])
+        dv1_same = np.linalg.norm(v1_tell - same["v1"])
+        dv2_same = np.linalg.norm(v2_tell - same["v2"])
+        assert max(dv1_same, dv2_same) < 1e-9, (dv1_same, dv2_same)
+        dv_all += [dv1, dv2]
+        dv_same_all += [dv1_same, dv2_same]
+        lines += [
+            *vector_lines(
+                f"dv1_{branch}", (v1_tell - solutions[branch]["v1"]) * 1e6, "mm/s", 4
+            ),
+            f"dv1_{branch} = {dv1 * 1e6:.4f} mm/s",
+            f"dv2_{branch} = {dv2 * 1e6:.4f} mm/s",
+            f"dv1 same mu_{branch} = {sci(dv1_same * 1e6)} mm/s",
+            f"dv2 same mu_{branch} = {sci(dv2_same * 1e6)} mm/s",
+            f"da mu_{branch} = {same['a'] - solutions[branch]['a']:.6f} km",
+        ]
+    write_output(
+        "06c-cmp",
+        lines
+        + [
+            f"dv max = {max(dv_all) * 1e6:.4f} mm/s",
+            f"dv same mu max = {sci(max(dv_same_all) * 1e6)} mm/s",
+        ],
+    )
+
+    # (d) Tellurion's analytic two-body propagation of each Lambert state.
+    tell = run_snippet("s06d")
+    lines = []
+    for branch in branches:
+        miss = tell["misses"][branch]
+        assert miss < 1e-3, miss
+        # Mixing gravitational parameters: our mu = 398600 solution flown with
+        # Orekit's mu misses r2 by the size of the mu sensitivity.
+        mixed = lagrange_propagate(r1_vec, solutions[branch]["v1"], dt, mu_tell)
+        lines += [
+            f"miss_{branch} = {sci(miss)} m",
+            f"mixed miss_{branch} = {np.linalg.norm(mixed['r2'] - r2_vec) * 1e3:.4f} m",
+        ]
+    write_output("06d-cmp", lines)
+
+
 def main() -> None:
     #########
     # p01 #
@@ -622,6 +1212,16 @@ def main() -> None:
     # p04 #
     #########
     problem_04()
+
+    #########
+    # p05 #
+    #########
+    problem_05()
+
+    #########
+    # p06 #
+    #########
+    problem_06()
 
 
 if __name__ == "__main__":
