@@ -1,0 +1,8 @@
+theta0 = 0.000000 deg
+theta = 34.685070 deg
+dtheta = 34.685070 deg
+r_rk4_x = 5899.978454 km
+r_rk4_y = 6460.703599 km
+r_rk4_z = 7234.941934 km
+cos dtheta rk4 = 0.8222923550
+swept rk4 = 34.685070 deg
