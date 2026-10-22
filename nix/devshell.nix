@@ -13,7 +13,7 @@ perSystem.devshell.mkShell {
             name = "pyr";
             category = "[python]";
             help = "run";
-            command = "python ./submission.py $@";
+            command = "uv run ./submission.py $@";
         }
         {
             name = "pyl";
@@ -49,13 +49,6 @@ perSystem.devshell.mkShell {
         # https://github.com/NixOS/nixpkgs/issues/516636
         (perSystem.nixpkgs-unstable.python3.withPackages (
             ps: with ps; [
-                # python packages here
-                pandas
-                matplotlib
-                numpy
-                scipy
-                cartopy
-
                 # dev packages
                 uv
                 ty
